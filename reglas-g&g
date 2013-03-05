@@ -1,0 +1,63 @@
+#!/bin/bash
+proxyfw=192.168.56.1
+redinterna=192.168.56.0/24
+sshinterno=192.168.56.20
+sshexterno=192.168.1.30
+ifaceext=wlan0
+ifaceint=vboxnet0
+
+##Limpieza de reglas antiguas
+iptables -F
+iptables -X
+iptables -Z
+iptables -t nat -F
+##Establecer política por defecto
+iptables -P INPUT DROP
+iptables -P OUTPUT DROP
+iptables -P FORWARD DROP
+##Habilitando las conexiones del FW a localhost
+iptables -A INPUT -i lo -j ACCEPT 
+iptables -A OUTPUT -o lo -j ACCEPT
+##Habilitando las conexiones al DNS desde el FW
+iptables -A OUTPUT -d 0/0 -o $ifaceext -p udp --dport 53 --sport 1024:65535 -j ACCEPT
+iptables -A INPUT -s 0/0 -i $ifaceext -p udp --sport 53 --dport 1024:65535 -j ACCEPT
+##Habilitando las conexiones a Internet desde el FW
+iptables -A OUTPUT -d 0/0 -m state --state NEW,ESTABLISHED,RELATED -p tcp -m multiport --dports 80,443 -j ACCEPT
+iptables -A INPUT -s 0/0 -m state --state ESTABLISHED,RELATED -p tcp -m multiport --sports 80,443 -j ACCEPT
+##Habilitando las conexiones al Proxy/FW desde la red interna
+iptables -A INPUT -s $redinterna -m state --state NEW,ESTABLISHED,RELATED -p tcp --dport 3128 -j ACCEPT
+iptables -A OUTPUT -d $redinterna -m state --state ESTABLISHED,RELATED -p tcp --sport 3128 -j ACCEPT
+##Habilitar el acceso remoto por SSH tanto para la red interna y externa -- Verificada
+iptables -A INPUT -s $sshinterno -p tcp --dport 22 -m state --state NEW,ESTABLISHED -j ACCEPT
+iptables -A OUTPUT -d $sshinterno -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -A INPUT -s $sshexterno -p tcp --dport 22 -m state --state NEW,ESTABLISHED -j ACCEPT
+iptables -A OUTPUT -d $sshexterno -m state --state ESTABLISHED,RELATED -j ACCEPT
+##Habilitar las consultas de DNS a Internet (Verificada)
+iptables -A FORWARD -s $redinterna -p udp --dport 53 --sport 1024:65535 -j ACCEPT
+iptables -A FORWARD -d $redinterna -p udp --sport 53 --dport 1024:65535 -j ACCEPT 
+#Habilitar consultas a correo HTTP/HTTPS/SMTP/IMAP/POP   ---- (Verificada)
+iptables -A FORWARD -s $redinterna -d 0/0 -m state --state NEW,ESTABLISHED -p tcp -m multiport --dports 25,80,110,143,443,465,995,993,587 -j ACCEPT
+iptables -A FORWARD -d $redinterna -s 0/0 -m state --state ESTABLISHED,RELATED -p tcp -m multiport --sports 25,80,110,143,465,443,995,993,587 -j ACCEPT
+#Habilitar consultas a CPANEL (Verificada)
+iptables -A FORWARD -s $redinterna -d 0/0 -m state --state NEW,ESTABLISHED -p tcp -m multiport --dports 2082,2083,2086,2087,2095,2096 -j ACCEPT
+iptables -A FORWARD -d $redinterna -s 0/0 -m state --state ESTABLISHED,RELATED -p tcp -m multiport --sports 2082,2083,2086,2087,2095,2096 -j ACCEPT
+#Habilitar consultas a FTP/FTPS  (Verificada)
+iptables -A FORWARD -s $redinterna -p tcp -m multiport --dports 20,21,990,991 -m state --state NEW,ESTABLISHED -j ACCEPT
+iptables -A FORWARD -s 0/0 -d $redinterna -m state --state ESTABLISHED,RELATED -m multiport -p tcp --sports 20,21,990,991 -j ACCEPT
+#Habilitar consultas ICMP (Verificada)
+iptables -A INPUT -p icmp  -j ACCEPT
+iptables -A OUTPUT -p icmp -j ACCEPT
+iptables -A FORWARD -p icmp -j ACCEPT
+#Proxy Transparente
+#Para filtrar en el propio fw, se debe configurar el proxy en el browser a utilizar en el fw.
+iptables -t nat -A PREROUTING -i $ifaceint -p tcp --dport 80 -j DNAT --to $proxyfw:3128
+#Habilitar NAT (Verificada)
+iptables -t nat -A POSTROUTING -j MASQUERADE
+
+
+
+###
+# Para volver las reglas persistentes:
+# Instalar: sudo apt-get install iptables-persistent
+# si hay alguna modificación: sudo sh -c 'iptables-save > /etc/iptables/rules.v4
+###
